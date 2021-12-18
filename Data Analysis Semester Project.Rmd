@@ -12,7 +12,7 @@ output:
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
-```{r libraries}
+```{r libraries, echo=FALSE}
 library(tidyverse)
 library(USAboundaries)
 library(sf)
@@ -23,7 +23,7 @@ library(lubridate)
 ```
 
 
-```{r tidy_red_vs_blue}
+```{r tidy_red_vs_blue, echo=FALSE}
 tidy_red_vs_blue <- function(x) {
   dataset_to_return <- x
   
@@ -42,7 +42,7 @@ dataset_to_return
 ```
 
 
-```{r adjust_colors}
+```{r adjust_colors, echo=FALSE}
 adjust_colors <- function(color_vector) {
   vector_to_return <- color_vector
   for (i in 1:length(color_vector)) {
@@ -60,7 +60,7 @@ adjust_colors <- function(color_vector) {
 ```
 
 
-```{r}
+```{r, echo=FALSE}
 aggregate_color <- function(x) {
   dates <- unique(x$date)
   
@@ -89,7 +89,7 @@ aggregate_color <- function(x) {
 ```
 
 
-```{r}
+```{r, echo=FALSE}
 aggregate_nytimes <- function(x) {
   red <- filter(x, Color == "Red")
   red <- aggregate_color(red)
@@ -104,7 +104,7 @@ aggregate_nytimes <- function(x) {
 ```
 
 
-```{r read in data}
+```{r read in data, echo=FALSE}
 #https://github.com/fivethirtyeight/data/tree/master/partisan-lean
 
 red_vs_blue <- read_csv("https://raw.githubusercontent.com/fivethirtyeight/data/master/partisan-lean/fivethirtyeight_partisan_lean_STATES.csv")
@@ -326,3 +326,187 @@ Of all the questions considered in this analysis, this one seems to be the one t
 [USA Statewise Latest Covid-19 Data at kaggle.com](https://www.kaggle.com/anandhuh/usa-statewise-latest-covid19-data?select=USA+Covid+Data.csv)
 
 [New York Times us-states.csv at github.com](https://github.com/nytimes/covid-19-data)
+
+***
+
+## Data Wrangling Code
+
+***
+
+```{r}
+library(tidyverse)
+library(USAboundaries)
+library(sf)
+library(downloader)
+library(readxl)
+library(stringr)
+library(lubridate)
+```
+
+
+```{r}
+tidy_red_vs_blue <- function(x) {
+  dataset_to_return <- x
+  
+  for (i in 1:length(x$`2021`)) {
+  if (x$`2021`[i] > 0) {
+    dataset_to_return$`2021`[i] = "Blue"
+  } else {
+    dataset_to_return$`2021`[i] = "Red"
+  }
+}
+
+colnames(dataset_to_return) <- c("state_name", "Color")
+
+dataset_to_return
+}
+```
+
+
+```{r}
+adjust_colors <- function(color_vector) {
+  vector_to_return <- color_vector
+  for (i in 1:length(color_vector)) {
+    if (vector_to_return[i] == "Red") {
+      vector_to_return[i] = "#e53131"
+    }
+  
+    if (vector_to_return[i] == "Blue") {
+      vector_to_return[i] = "#008fd5"
+    }
+  }
+  
+  vector_to_return
+}
+```
+
+
+```{r}
+aggregate_color <- function(x) {
+  dates <- unique(x$date)
+  
+  dataset_to_return <- filter(x, state_name == "")
+  
+  for (i in 1:length(dates)) {
+    temp <- filter(x, date == dates[i])
+    
+    sum_cases <- sum(temp$cases)
+    sum_deaths <- sum(temp$deaths)
+    sum_population <- sum(temp$Population)
+    
+    temp <- temp[c(1),]
+    temp$cases[1] <- sum_cases
+    temp$deaths[1] <- sum_deaths
+    temp$Population[1] <- sum_population
+    
+    dataset_to_return <- bind_rows(dataset_to_return, temp)
+  }
+  
+  dataset_to_return <- select(dataset_to_return, -2)
+  
+  dataset_to_return
+  
+}
+```
+
+
+```{r}
+aggregate_nytimes <- function(x) {
+  red <- filter(x, Color == "Red")
+  red <- aggregate_color(red)
+  
+  blue <- filter(x, Color == "Blue")
+  blue <- aggregate_color(blue)
+  
+  dataset_to_return <- bind_rows(red, blue)
+  
+  dataset_to_return
+}
+```
+
+
+```{r}
+#https://github.com/fivethirtyeight/data/tree/master/partisan-lean
+
+red_vs_blue <- read_csv("https://raw.githubusercontent.com/fivethirtyeight/data/master/partisan-lean/fivethirtyeight_partisan_lean_STATES.csv")
+
+red_vs_blue <- tidy_red_vs_blue(red_vs_blue)
+
+us_map <- us_states()
+us_map <- filter(us_map, jurisdiction_type == "state" & state_abbr != "AK" & state_abbr != "HI")
+
+us_map <- us_map %>% 
+  left_join(red_vs_blue, by = "state_name")
+
+us_map$Color <- adjust_colors(us_map$Color)
+
+us_map <- select(us_map, -(1:9), -12)
+
+us_map <- mutate(us_map, lon = map_dbl(geometry, ~st_centroid(.x)[[1]]), 
+         lat = map_dbl(geometry, ~st_centroid(.x)[[2]]))
+
+#https://www.kaggle.com/paultimothymooney/usa-covid19-vaccinations
+
+us_state_vaccinations <- read_csv("us_state_vaccinations.csv")
+colnames(us_state_vaccinations)[2] <- "state_name"
+
+us_state_vaccinations <- select(us_state_vaccinations, date, state_name, people_fully_vaccinated_per_hundred)
+
+us_state_vaccinations$state_name <- replace(us_state_vaccinations$state_name, us_state_vaccinations$state_name == "New York State", "New York")
+
+vax_2021_10_18 <- filter(us_state_vaccinations, date == "2021-12-07")
+vax_2021_10_18 <- select(vax_2021_10_18, -1)
+
+vax_map <- us_map %>% 
+  left_join(vax_2021_10_18, by = "state_name")
+
+vax_boxplot <- filter(us_state_vaccinations, date == "2021-12-07" | date == "2021-08-12" | date == "2021-04-07")
+
+vax_boxplot <- vax_boxplot %>%
+  left_join(red_vs_blue, by = "state_name")
+
+vax_boxplot <- filter(vax_boxplot, Color != "NA")
+
+#https://www.kaggle.com/anandhuh/usa-statewise-latest-covid19-data?select=USA+Covid+Data.csv
+
+# This dataset contains Covid-19 data of all the states in USA as on December 08, 2021
+
+covid_test <- read_csv("USA Covid Data.csv")
+colnames(covid_test)[1] <- "state_name"
+
+test_boxplot <- select(covid_test, 1, 9)
+test_boxplot$`Tests/1 mil population` <- test_boxplot$`Tests/1 mil population` / 10000
+colnames(test_boxplot) <- c("state_name", "tests_per_hundred")
+
+test_map <- us_map %>%
+  left_join(test_boxplot, by = "state_name")
+
+test_boxplot <- test_boxplot %>%
+  left_join(red_vs_blue, by = "state_name")
+
+#https://github.com/nytimes/covid-19-data
+
+nytimes_covid <- read_csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-states.csv")
+
+nytimes_covid <- filter(nytimes_covid, date > "2020-12-31")
+
+nytimes_covid <- select(nytimes_covid, -fips)
+
+colnames(nytimes_covid)[2] <- "state_name"
+
+nytimes_covid <- nytimes_covid %>%
+  left_join(select(covid_test, 1, 10), by = "state_name")
+
+nytimes_covid <- filter(nytimes_covid, Population != "NA")
+
+nytimes_covid <- nytimes_covid %>%
+  left_join(red_vs_blue, by = "state_name")
+
+nytimes_red_blue <- aggregate_nytimes(nytimes_covid)
+
+cases_per_hundred <- (nytimes_red_blue$cases / nytimes_red_blue$Population) * 100
+deaths_per_hundred <- (nytimes_red_blue$deaths / nytimes_red_blue$Population) * 100
+
+nytimes_red_blue <- mutate(nytimes_red_blue, cases_per_hundred, deaths_per_hundred)
+nytimes_red_blue <- select(nytimes_red_blue, -(2:4))
+```
